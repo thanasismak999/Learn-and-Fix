@@ -1,0 +1,69 @@
+import bpy
+import bmesh
+from mathutils import Euler, Vector
+import math
+
+VERTEX_INDICES = [0, 1, 2] #εδώ θα μπει η λίστα των vertexes
+ROTATION_STEP = math.radians(2) 
+TOTAL_STEPS = 60 #εδώ είναι τα στεπς, x * τα rotation step = μοίρες
+VIEW_HEIGHT = math.radians(80) #ύψος κάμερας
+VIEW_DISTANCE = 5.0 #εδώ μπαίνει δημόσια μεταβλητή για το πόσο ζουμ θέλω να είναι
+
+rotation_step = 20
+target_center = Vector()
+
+obj = bpy.context.active_object
+bpy.ops.object.mode_set(mode='EDIT')
+bm = bmesh.from_edit_mesh(obj.data)
+bm.verts.ensure_lookup_table()
+
+for v in bm.verts:
+    v.select = False
+
+positions = []
+for i in VERTEX_INDICES:
+    if i < len(bm.verts):
+        bm.verts[i].select = True
+        positions.append(obj.matrix_world @ bm.verts[i].co)
+    else:
+        print(f"Vertex index {i} εκτός ορίων.")
+
+bmesh.update_edit_mesh(obj.data)
+
+if not positions:
+    raise Exception("Δεν υπάρχουν έγκυρα vertices.")
+
+
+target_center = sum(positions, Vector()) / len(positions) # μέση απόσταση μεταξύ vertexes
+
+region_3d = None
+for area in bpy.context.window.screen.areas:
+    if area.type == 'VIEW_3D':
+        for space in area.spaces:
+            if space.type == 'VIEW_3D':
+                region_3d = space.region_3d
+                break
+
+if not region_3d:
+    raise Exception("Δεν βρέθηκε περιοχή VIEW_3D.")
+
+region_3d.view_location = target_center
+region_3d.view_distance = VIEW_DISTANCE
+region_3d.view_rotation = Euler((VIEW_HEIGHT, 0, 0), 'XYZ').to_quaternion()
+
+
+def rotate_in_edit_mode(): # Η περιστροφή
+    global rotation_step
+
+    if rotation_step >= TOTAL_STEPS:
+        rotation_step = 0
+        return None
+
+    angle = ROTATION_STEP * rotation_step
+    rotation = Euler((VIEW_HEIGHT, 0, angle), 'XYZ').to_quaternion()
+    region_3d.view_rotation = rotation
+
+    rotation_step += 1
+    return 0.02
+
+bpy.app.timers.register(rotate_in_edit_mode) # Εκτελεση def περιστροφής

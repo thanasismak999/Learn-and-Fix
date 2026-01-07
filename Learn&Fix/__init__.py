@@ -1,10 +1,10 @@
 bl_info = {
     "name": "Learn&Fix",
     "author": "Athanasios Makridis",
-    "version": (1, 0),
+    "version": (3, 8),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Learn&Fix",
-    "description": "Learn and fix common mesh mistakes — an interactive topology assistant.",
+    "description": "Smart workflow assistant. Ignores internal actions.",
     "category": "3D View",
 }
 
@@ -12,1011 +12,617 @@ import bpy
 import bmesh
 import math
 import json
-from mathutils import Vector, Euler
-
-# --- imports detection modules ---
-from .check_poles import detect_poles
-from .check_flipped import detect_flipped_normals
-from .check_ngons import detect_ngons
-from .check_nonmanifold import detect_nonmanifold
-from .check_transforms import detect_unapplied_transforms
-from .check_holes import detect_holes
-from .check_thin_tris import detect_thin_tris
-from .check_isolated import detect_isolated_vertices
-from .check_duplicates import detect_duplicates
-from .check_selfintersect import detect_self_intersections
-from .check_internalfaces import detect_internal_faces
-from .check_origin import detect_wrong_origin
-from .check_inconsistent import detect_inconsistent_normals
-from .check_overlappinguv import detect_overlapping_uvs
-from .check_edgeflow import detect_edge_flow
+import time
+from mathutils import Vector, Euler, Quaternion
 import os
+import sys
+import subprocess
 import bpy.utils.previews
+from bpy.app.handlers import persistent
+
+# =========================================================
+# IMPORTS: DETECTION MODULES
+# =========================================================
+from .checks.check_poles import detect_poles
+from .checks.check_flipped import detect_flipped_normals
+from .checks.check_ngons import detect_ngons
+from .checks.check_nonmanifold import detect_nonmanifold
+from .checks.check_transforms import detect_unapplied_transforms
+from .checks.check_holes import detect_holes
+from .checks.check_thin_tris import detect_thin_tris
+from .checks.check_isolated import detect_isolated_vertices
+from .checks.check_duplicates import detect_duplicates
+from .checks.check_selfintersect import detect_self_intersections
+from .checks.check_internalfaces import detect_internal_faces
+from .checks.check_origin import detect_wrong_origin
+from .checks.check_inconsistent import detect_inconsistent_normals
+from .checks.check_overlappinguv import detect_overlapping_uvs
+from .checks.check_edgeflow import detect_edge_flow
 
 preview_collections = {}
 
+# =========================================================
+# CONFIGURATION & MAPPINGS
+# =========================================================
+ISSUE_DISPLAY_NAMES = {
+    'FLIPPED': "Flipped Normals", 
+    'POLES': "Poles", 
+    'NGONS': "N-Gons",
+    'NONMANIFOLD': "Non-Manifold", 
+    'HOLES': "Holes", 
+    'THINTRIS': "Thin Triangles",
+    'ISOLATED': "Isolated Vertices", 
+    'DUPLICATES': "Duplicate Vertices",
+    'SELFINTERSECT': "Self-Intersections", 
+    'INTERNAL': "Internal Faces",
+    'ORIGIN': "Wrong Origin", 
+    'INCONSISTENT': "Inconsistent Normals",
+    'OVERLAPPING_UV': "Overlapping UVs", 
+    'EDGEFLOW': "Edge Flow Breaks",
+    'TRANSFORMS': "Unapplied Scale"
+}
+
+IMAGE_MAPPING = {
+    'FLIPPED': "FLIPPED_NORMALS.png",
+    'POLES': "POLES.png",
+    'NGONS': "NGONS.png",
+    'NONMANIFOLD': "NON_MANIFOLD.png",
+    'HOLES': "HOLES.png",
+    'THINTRIS': "THIN_FACES.png",
+    'ISOLATED': "ISOLATED_VERTS.png",
+    'DUPLICATES': "DUPLICATE_VERTS.png",
+    'SELFINTERSECT': "SELF_INTERSECT.png",
+    'INTERNAL': "INTERNAL_FACES.png",
+    'ORIGIN': "WRONG_ORIGIN.png",
+    'INCONSISTENT': "INCONSISTENT_NORMALS.png",
+    'OVERLAPPING_UV': "OVERLAPPING_UV.png",
+    'EDGEFLOW': "EDGE_FLOW.png",
+    'TRANSFORMS': "UNAPPLIED_SCALE.png"
+}
+
+CHECKS_MAPPING = [
+    ('check_ngons', detect_ngons, 'NGONS'),
+    ('check_thin_tris', detect_thin_tris, 'THINTRIS'),
+    ('check_poles', detect_poles, 'POLES'),
+    ('check_edgeflow', detect_edge_flow, 'EDGEFLOW'),
+    ('check_isolated', detect_isolated_vertices, 'ISOLATED'),
+    ('check_duplicates', detect_duplicates, 'DUPLICATES'),
+    ('check_nonmanifold', detect_nonmanifold, 'NONMANIFOLD'),
+    ('check_selfintersect', detect_self_intersections, 'SELFINTERSECT'),
+    ('check_holes', detect_holes, 'HOLES'),
+    ('check_internalfaces', detect_internal_faces, 'INTERNAL'),
+    ('check_flipped', detect_flipped_normals, 'FLIPPED'),
+    ('check_inconsistent', detect_inconsistent_normals, 'INCONSISTENT'),
+    ('check_overlappinguv', detect_overlapping_uvs, 'OVERLAPPING_UV'),
+    ('check_transforms', detect_unapplied_transforms, 'TRANSFORMS'),
+    ('check_origin', detect_wrong_origin, 'ORIGIN'),
+]
+
+YOUTUBE_URLS = {
+    'FLIPPED': "https://www.youtube.com/results?search_query=blender+fix+flipped+normals",
+    'INCONSISTENT': "https://www.youtube.com/results?search_query=blender+recalculate+normals",
+    'POLES': "https://www.youtube.com/results?search_query=blender+topology+poles+explained",
+    'NGONS': "https://www.youtube.com/results?search_query=blender+why+ngons+are+bad",
+    'NONMANIFOLD': "https://www.youtube.com/results?search_query=blender+fix+non+manifold",
+    'HOLES': "https://www.youtube.com/results?search_query=blender+fill+holes",
+    'THINTRIS': "https://www.youtube.com/results?search_query=blender+bad+topology+thin+triangles",
+    'ISOLATED': "https://www.youtube.com/results?search_query=blender+clean+up+loose+geometry",
+    'DUPLICATES': "https://www.youtube.com/results?search_query=blender+merge+by+distance",
+    'SELFINTERSECT': "https://www.youtube.com/results?search_query=blender+fix+self+intersecting",
+    'INTERNAL': "https://www.youtube.com/results?search_query=blender+remove+interior+faces",
+    'OVERLAPPING_UV': "https://www.youtube.com/results?search_query=blender+uv+pack+overlapping",
+    'EDGEFLOW': "https://www.youtube.com/results?search_query=blender+topology+edge+flow",
+    'ORIGIN': "https://www.youtube.com/results?search_query=blender+set+origin",
+    'TRANSFORMS': "https://www.youtube.com/results?search_query=blender+apply+scale"
+}
+
+EXPLANATIONS = {
+    'FLIPPED': "PROBLEM: Normals point inwards.\nWHY: Breaks shading/printing.\nFIX: Edit Mode > Select All > Shift+N.",
+    'INCONSISTENT': "PROBLEM: Mixed normal directions.\nWHY: Black shading artifacts.\nFIX: Select All > Shift+N.",
+    'POLES': "PROBLEM: Vertex with != 4 edges.\nWHY: Pinching in Subdivision.\nFIX: Retopologize to flat areas.",
+    'NGONS': "PROBLEM: Face with > 4 edges.\nWHY: Bad deformation.\nFIX: Ctrl+T or Knife Tool.",
+    'NONMANIFOLD': "PROBLEM: Impossible geometry.\nWHY: Not watertight.\nFIX: Clean Up > Non-Manifold.",
+    'HOLES': "PROBLEM: Open mesh.\nWHY: Slicers fail.\nFIX: Select edge > F to Fill.",
+    'THINTRIS': "PROBLEM: Needle triangles.\nWHY: Shading errors.\nFIX: Slide vertices (GG).",
+    'ISOLATED': "PROBLEM: Floating vertices.\nWHY: File bloat.\nFIX: Clean Up > Delete Loose.",
+    'DUPLICATES': "PROBLEM: Stacked vertices.\nWHY: Z-fighting.\nFIX: Merge by Distance (M).",
+    'SELFINTERSECT': "PROBLEM: Mesh clips itself.\nWHY: Physics/Print fail.\nFIX: Move vertices/Boolean.",
+    'INTERNAL': "PROBLEM: Inside faces.\nWHY: Wastes polygons.\nFIX: Delete interior faces.",
+    'OVERLAPPING_UV': "PROBLEM: Stacked UVs.\nWHY: Texture glitches.\nFIX: UV > Pack Islands.",
+    'EDGEFLOW': "PROBLEM: Bad loops.\nWHY: Bad reflections.\nFIX: Manual retopology.",
+    'ORIGIN': "PROBLEM: Origin far away.\nWHY: Hard control.\nFIX: Set Origin to Geometry.",
+    'TRANSFORMS': "PROBLEM: Scale != 1.\nWHY: Distorts tools.\nFIX: Ctrl+A > Apply Scale."
+}
+
+WORKFLOW_RULES = {
+    'PRINTING': { 'defaults': {'check_thin_tris': True, 'check_isolated': True, 'check_duplicates': True, 'check_nonmanifold': True, 'check_selfintersect': True, 'check_holes': True, 'check_internalfaces': True, 'check_flipped': True, 'check_inconsistent': True, 'check_transforms': True, 'check_origin': True, 'check_ngons': False, 'check_poles': False, 'check_edgeflow': False, 'check_overlappinguv': False}},
+    'ANIMATION': { 'defaults': {'check_ngons': True, 'check_thin_tris': True, 'check_poles': True, 'check_edgeflow': True, 'check_isolated': True, 'check_duplicates': True, 'check_flipped': True, 'check_inconsistent': True, 'check_overlappinguv': True, 'check_transforms': True, 'check_origin': True, 'check_nonmanifold': False, 'check_selfintersect': False, 'check_holes': False, 'check_internalfaces': False}},
+    'GAMES': { 'defaults': {'check_ngons': True, 'check_thin_tris': True, 'check_isolated': True, 'check_duplicates': True, 'check_internalfaces': True, 'check_flipped': True, 'check_inconsistent': True, 'check_overlappinguv': True, 'check_transforms': True, 'check_origin': True, 'check_poles': False, 'check_edgeflow': False, 'check_nonmanifold': False, 'check_selfintersect': False, 'check_holes': False}}
+}
+
+def update_workflow(self, context):
+    mode = self.workflow_mode
+    if mode == 'SELECT' or mode == 'CUSTOM': return
+    rules = WORKFLOW_RULES.get(mode)
+    if rules:
+        defaults = rules['defaults']
+        for prop_name, value in defaults.items():
+            if hasattr(self, prop_name): setattr(self, prop_name, value)
+
+# =========================================================
+# UTILS & IMAGE LOADING
+# =========================================================
 def load_preview_icons():
     global preview_collections
     pcoll = bpy.utils.previews.new()
-
     icons_dir = os.path.join(os.path.dirname(__file__), "icons")
-    logo_path = os.path.join(icons_dir, "learnfix_logo.png")
-
-    if os.path.exists(logo_path):
-        pcoll.load("learnfix_logo", logo_path, 'IMAGE')
-
+    
+    if os.path.exists(os.path.join(icons_dir, "learnfix_logo.png")):
+        pcoll.load("learnfix_logo", os.path.join(icons_dir, "learnfix_logo.png"), 'IMAGE')
+    
+    for key, filename in IMAGE_MAPPING.items():
+        path = os.path.join(icons_dir, filename)
+        if os.path.exists(path): 
+            pcoll.load(key, path, 'IMAGE')
+            
     preview_collections["main"] = pcoll
 
-
 def unload_preview_icons():
-    global preview_collections
-    for pcoll in preview_collections.values():
-        bpy.utils.previews.remove(pcoll)
+    for pcoll in preview_collections.values(): bpy.utils.previews.remove(pcoll)
     preview_collections.clear()
 
-def get_learnfix_logo():
-    """Returns the Learn&Fix logo image, loading it if necessary."""
-    import os
-    icons_dir = os.path.join(os.path.dirname(__file__), "icons")
-    image_path = os.path.join(icons_dir, "learnfix_logo.png")
+def get_icon(name):
+    pcoll = preview_collections.get("main")
+    if pcoll and name in pcoll: return pcoll[name].icon_id
+    return 0
 
-    if os.path.exists(image_path):
-        # Look for any already loaded image that matches path
-        for img in bpy.data.images:
-            if img.filepath and os.path.samefile(bpy.path.abspath(img.filepath), image_path):
-                return img
-        # Try loading safely
-        try:
-            img = bpy.data.images.load(image_path)
-            return img  # no rename here
-        except Exception as e:
-            print("Error loading logo:", e)
-            return None
-    else:
-        print("Logo file not found at:", image_path)
-        return None
-
-
-# =========================================================
-# Property Groups
-# =========================================================
-
-class MeshCheckerIndexItem(bpy.types.PropertyGroup):
-    value: bpy.props.IntProperty()
-
-
+class MeshCheckerIndexItem(bpy.types.PropertyGroup): value: bpy.props.IntProperty()
 class MeshCheckerResultItem(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty()
     issue_type: bpy.props.StringProperty()
-
+    count: bpy.props.IntProperty()
+    improvement: bpy.props.FloatProperty(min=0.0, max=1.0, subtype='PERCENTAGE')
 
 def _update_issue_type(self, context):
-    # Όταν αλλάζει κατηγορία, ξεκινάμε από την αρχή και αδειάζουμε τη λίστα
     self.current_index = 0
     self.current_indices.clear()
-    self.hole_groups_json = "{}"
-    self.progress_value = 0.0
-
 
 class MeshCheckerProperties(bpy.types.PropertyGroup):
-    # Toggle sections
-    show_topology: bpy.props.BoolProperty(default=False)
-    show_geometry: bpy.props.BoolProperty(default=False)
-    show_normals: bpy.props.BoolProperty(default=False)
-    show_workflow: bpy.props.BoolProperty(default=False)
+    workflow_mode: bpy.props.EnumProperty(name="Usage Goal", items=[('SELECT', "Select a Workflow...", ""), ('PRINTING', "3D Printing", ""), ('ANIMATION', "Animation", ""), ('GAMES', "Game Asset", ""), ('CUSTOM', "Expert", "")], default='SELECT', update=update_workflow)
+    
+    # --- AUTO CHECK PROPERTIES ---
+    auto_check_enabled: bpy.props.BoolProperty(name="Auto-Check", default=False)
+    auto_check_threshold: bpy.props.IntProperty(name="Every X Moves", default=10, min=1, max=100)
+    edit_operation_count: bpy.props.IntProperty(default=0)
+    
+    # --- INTERNAL FLAG (Prevent self-triggering) ---
+    is_internal_operation: bpy.props.BoolProperty(default=False)
 
-    # Results dropdown toggle
+    show_topology: bpy.props.BoolProperty(default=True)
+    show_geometry: bpy.props.BoolProperty(default=True)
+    show_normals: bpy.props.BoolProperty(default=True)
+    show_workflow: bpy.props.BoolProperty(default=True)
     show_results: bpy.props.BoolProperty(name="Results", default=True)
 
-    # --- Topology ---
     check_ngons: bpy.props.BoolProperty(name="N-Gons", default=True)
     check_thin_tris: bpy.props.BoolProperty(name="Long Thin Triangles", default=True)
-    thintris_threshold: bpy.props.FloatProperty(
-        name="Thin Tri Threshold",
-        default=10.0, min=1.0, max=1000.0
-    )
+    thintris_threshold: bpy.props.FloatProperty(name="Threshold", default=10.0)
     check_poles: bpy.props.BoolProperty(name="Poles", default=True)
-    check_edgeflow: bpy.props.BoolProperty(name="Edge Flow Breaks", default=True)
-    check_isolated: bpy.props.BoolProperty(name="Isolated Vertices", default=True)
-
-    # --- Geometry ---
-    check_duplicates: bpy.props.BoolProperty(name="Duplicate Vertices", default=True)
+    check_edgeflow: bpy.props.BoolProperty(name="Edge Flow", default=True)
+    check_isolated: bpy.props.BoolProperty(name="Isolated", default=True)
+    check_duplicates: bpy.props.BoolProperty(name="Duplicates", default=True)
     check_nonmanifold: bpy.props.BoolProperty(name="Non-Manifold", default=True)
-    check_selfintersect: bpy.props.BoolProperty(name="Self Intersections", default=True)
+    check_selfintersect: bpy.props.BoolProperty(name="Self-Intersect", default=True)
     check_holes: bpy.props.BoolProperty(name="Holes", default=True)
-    check_internalfaces: bpy.props.BoolProperty(name="Internal Faces", default=True)
+    check_internalfaces: bpy.props.BoolProperty(name="Internal", default=True)
+    check_flipped: bpy.props.BoolProperty(name="Flipped", default=True)
+    check_inconsistent: bpy.props.BoolProperty(name="Inconsistent", default=True)
+    check_overlappinguv: bpy.props.BoolProperty(name="Overlap UV", default=True)
+    check_transforms: bpy.props.BoolProperty(name="Transforms", default=True)
+    check_origin: bpy.props.BoolProperty(name="Origin", default=True)
 
-    # --- Normals / Shading ---
-    check_flipped: bpy.props.BoolProperty(name="Flipped Normals", default=True)
-    check_inconsistent: bpy.props.BoolProperty(name="Inconsistent Orientation", default=True)
-    check_overlappinguv: bpy.props.BoolProperty(name="Overlapping UV", default=True)
-
-    # --- Workflow ---
-    check_transforms: bpy.props.BoolProperty(name="Unapplied Transforms", default=True)
-    check_origin: bpy.props.BoolProperty(name="Wrong Origin Placement", default=True)
-
-    # Αποτελέσματα
     results: bpy.props.CollectionProperty(type=MeshCheckerResultItem)
-
-    # Τύπος προβλήματος για visualization
-    issue_type: bpy.props.EnumProperty(
-        name="Είδος Προβλήματος",
-        description="Διάλεξε ποιο πρόβλημα θέλεις να εικονοποιήσεις",
-        items=[
-            ('FLIPPED', "Flipped Normals", ""),
-            ('POLES', "Poles", ""),
-            ('NGONS', "N-Gons", ""),
-            ('NONMANIFOLD', "Non-Manifold", ""),
-            ('HOLES', "Holes", ""),
-            ('THINTRIS', "Thin Triangles", ""),
-            ('ISOLATED', "Isolated Vertices", ""),
-            ('DUPLICATES', "Duplicate Vertices", ""),
-            ('SELFINTERSECT', "Self Intersections", ""),
-            ('INTERNAL', "Internal Faces", ""),
-            ('ORIGIN', "Wrong Origin", ""),
-            ('INCONSISTENT', "Inconsistent Normals", ""),
-            ('OVERLAPPING_UV', "Overlapping UVs", ""),
-            ('EDGEFLOW', "Edge Flow Breaks", ""),
-        ],
-        default='FLIPPED',
-        update=_update_issue_type
-    )
-
-    # Τρέχων δείκτης/λίστα indices για την επιλεγμένη κατηγορία
+    issue_type: bpy.props.EnumProperty(name="Issue Type", items=[(k, v, "") for k,v in ISSUE_DISPLAY_NAMES.items()], update=_update_issue_type)
     current_index: bpy.props.IntProperty(default=0)
     current_indices: bpy.props.CollectionProperty(type=MeshCheckerIndexItem)
-
-    hole_groups_json: bpy.props.StringProperty(default="{}")
-
-    # progress value (0..1)
-    progress_value: bpy.props.FloatProperty(default=0.0)
-
+    baseline_stats: bpy.props.StringProperty(default="{}")
+    total_score: bpy.props.FloatProperty(default=1.0, min=0.0, max=1.0, subtype='PERCENTAGE')
 
 # =========================================================
-# Highlight / View helpers
+# EVENT HANDLER: SMART FILTERING
 # =========================================================
-
-def highlight_faces(obj, face_indices):
-    if obj.mode != 'EDIT':
-        bpy.ops.object.mode_set(mode='EDIT')
-    bm = bmesh.from_edit_mesh(obj.data)
-    bm.faces.ensure_lookup_table()
-    for f in bm.faces:
-        f.select = False
-    for idx in face_indices:
-        if 0 <= idx < len(bm.faces):
-            bm.faces[idx].select = True
-    bmesh.update_edit_mesh(obj.data, loop_triangles=True)
-
-
-def highlight_vertices(obj, vert_indices):
-    if obj.mode != 'EDIT':
-        bpy.ops.object.mode_set(mode='EDIT')
-    bm = bmesh.from_edit_mesh(obj.data)
-    bm.verts.ensure_lookup_table()
-    for v in bm.verts:
-        v.select = False
-    for idx in vert_indices:
-        if 0 <= idx < len(bm.verts):
-            bm.verts[idx].select = True
-    bmesh.update_edit_mesh(obj.data, loop_triangles=True)
-
-
-def highlight_edges(obj, edge_indices):
-    if obj.mode != 'EDIT':
-        bpy.ops.object.mode_set(mode='EDIT')
-    bm = bmesh.from_edit_mesh(obj.data)
-    bm.edges.ensure_lookup_table()
-    for e in bm.edges:
-        e.select = False
-    for idx in edge_indices:
-        if 0 <= idx < len(bm.edges):
-            bm.edges[idx].select = True
-    bmesh.update_edit_mesh(obj.data, loop_triangles=True)
-
-
-def smooth_view_to(context, target_center, target_distance=3.5, target_rotation=None, duration=1.0, steps=30):
-    """Ομαλή κίνηση/zoom/περιστροφή του 3D View προς το target, στο ίδιο area με το Panel."""
-    if target_rotation is None:
-        target_rotation = Euler((math.radians(70), 0, math.radians(25)), 'XYZ').to_quaternion()
-
-    # Βρες το 3D view της τρέχουσας περιοχής (ώστε να μη ζουμάρει σε άλλο monitor)
-    area = context.area
-    region_3d = None
-    if area and area.type == 'VIEW_3D':
-        for space in area.spaces:
-            if space.type == 'VIEW_3D':
-                region_3d = space.region_3d
-                break
-    if region_3d is None:
-        # fallback: σκάναρε οθόνες
-        for area in context.window.screen.areas:
-            if area.type == 'VIEW_3D':
-                for space in area.spaces:
-                    if space.type == 'VIEW_3D':
-                        region_3d = space.region_3d
-                        break
-                if region_3d:
-                    break
-    if region_3d is None:
+@persistent
+def on_depsgraph_update(scene, depsgraph):
+    """
+    Counts purely geometric changes (edits).
+    Ignores:
+    1. Internal addon operations (Macro Nav, Check running)
+    2. Selection changes
+    3. Navigation
+    """
+    props = scene.mesh_checker_props
+    
+    # --- CHECK FOR INTERNAL FLAG ---
+    if props.is_internal_operation:
+        props.is_internal_operation = False # Reset and Ignore this update
         return
+    # -------------------------------
 
-    start_loc = region_3d.view_location.copy()
-    start_dist = region_3d.view_distance
-    start_rot = region_3d.view_rotation.copy()
+    if not props.auto_check_enabled: return
+    
+    obj = bpy.context.active_object
+    if not obj or obj.mode != 'EDIT': return
 
-    step_data = {"i": 0}
-    step_time = duration / steps
+    for update in depsgraph.updates:
+        if update.id.original == obj:
+            if update.is_updated_geometry:
+                props.edit_operation_count += 1
+                
+                if props.edit_operation_count >= props.auto_check_threshold:
+                    props.edit_operation_count = 0
+                    bpy.app.timers.register(trigger_auto_check, first_interval=0.1)
+                break 
 
-    def _tick():
-        t = step_data["i"] / steps
-        region_3d.view_location = start_loc.lerp(target_center, t)
-        region_3d.view_distance = start_dist + (target_distance - start_dist) * t
-        region_3d.view_rotation = start_rot.slerp(target_rotation, t)
-        step_data["i"] += 1
-        if step_data["i"] > steps:
-            return None
-        return step_time
-
-    bpy.app.timers.register(_tick)
-
+def trigger_auto_check():
+    if bpy.context.active_object:
+        bpy.ops.mesh.run_checks()
+    return None
 
 # =========================================================
-# Core visualization logic
+# CAMERA & VISUALIZATION
 # =========================================================
+class SmoothViewController:
+    def __init__(self):
+        self._timer = None; self.start_time = 0; self.duration = 0.8; self.region_3d = None
+    def start_animation(self, context, target_center, target_normal=None, dist=3.5):
+        if self._timer: 
+            try: bpy.app.timers.unregister(self._timer)
+            except: pass
+        area = context.area
+        if area.type == 'VIEW_3D':
+            for s in area.spaces: 
+                if s.type == 'VIEW_3D': self.region_3d = s.region_3d; break
+        if not self.region_3d: return
+        self.start_loc = self.region_3d.view_location.copy()
+        self.start_dist = self.region_3d.view_distance
+        self.start_rot = self.region_3d.view_rotation.copy()
+        self.target_loc = target_center; self.target_dist = dist
+        self.target_rot = target_normal.to_track_quat('Z', 'Y') if target_normal else self.start_rot.copy()
+        self.start_time = time.time()
+        self._timer = self._tick
+        bpy.app.timers.register(self._timer)
+    def _tick(self):
+        if not self.region_3d: return None
+        elapsed = time.time() - self.start_time
+        t = elapsed / self.duration
+        if t >= 1.0:
+            self.region_3d.view_location = self.target_loc; self.region_3d.view_distance = self.target_dist
+            self.region_3d.view_rotation = self.target_rot; self._timer = None; return None
+        prog = 1 - (1 - t) ** 3
+        self.region_3d.view_location = self.start_loc.lerp(self.target_loc, prog)
+        self.region_3d.view_distance = self.start_dist + (self.target_dist - self.start_dist) * prog
+        self.region_3d.view_rotation = self.start_rot.slerp(self.target_rot, prog)
+        return 0.01
+view_controller = SmoothViewController()
+
+def highlight_generic(obj, indices, mode_type):
+    if obj.mode != 'EDIT': bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(obj.data)
+    if mode_type=='faces': 
+        bm.faces.ensure_lookup_table(); [setattr(f, 'select', i in indices) for i,f in enumerate(bm.faces)]
+    elif mode_type=='verts': 
+        bm.verts.ensure_lookup_table(); [setattr(v, 'select', i in indices) for i,v in enumerate(bm.verts)]
+    elif mode_type=='edges': 
+        bm.edges.ensure_lookup_table(); [setattr(e, 'select', i in indices) for i,e in enumerate(bm.edges)]
+    bmesh.update_edit_mesh(obj.data)
 
 def ensure_indices_for_issue(obj, props):
-    """Χτίζει ΜΟΝΟ όταν είναι άδεια η τρέχουσα λίστα indices για το επιλεγμένο issue."""
-    issue = props.issue_type
-
-    # Αν έχουμε ήδη λίστα για το τρέχον issue, μην την ξαναχτίζεις
-    if len(props.current_indices) > 0:
-        return
-
-    if issue == 'FLIPPED':
-        data = detect_flipped_normals(obj)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-
-    elif issue == 'POLES':
-        data = detect_poles(obj, min_valence=3, max_valence=6)
-        pole_verts = (data["indices"].get("low_valence", []) +
-                      data["indices"].get("high_valence", []))
-        for i in pole_verts:
-            it = props.current_indices.add()
-            it.value = i
-
-    elif issue == 'NGONS':
-        data = detect_ngons(obj)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-
-    elif issue == 'NONMANIFOLD':
-        data = detect_nonmanifold(obj)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-
-    elif issue == 'HOLES':
-        data = detect_holes(obj, closed_only=True)
-        groups = data.get("closed_groups") or data.get("groups") or []
-
-        mapping = {}
-        for comp in groups:
-            if not comp:
-                continue
-            rep = comp[0]  # representative edge index
-            it = props.current_indices.add()
-            it.value = rep
-            mapping[str(rep)] = comp  # ολόκληρο το loop
-
-        props.hole_groups_json = json.dumps(mapping)
-
-    elif issue == 'THINTRIS':
-        data = detect_thin_tris(obj, aspect_threshold=props.thintris_threshold)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-
-    elif issue == 'ISOLATED':
-        data = detect_isolated_vertices(obj)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-            
-    elif issue == 'INTERNAL':
-        data = detect_internal_faces(obj)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-
-    elif issue == 'DUPLICATES':
-        data = detect_duplicates(obj, distance=0.0001)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-            
-    elif issue == 'SELFINTERSECT':
-        data = detect_self_intersections(obj)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-            
-    elif issue == 'INCONSISTENT':
-        data = detect_inconsistent_normals(obj)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-
-    elif issue == 'OVERLAPPING_UV':
-        data = detect_overlapping_uvs(obj)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-            
-    elif issue == 'ORIGIN':
-        pass
-    
-    elif issue == 'EDGEFLOW':
-        data = detect_edge_flow(obj)
-        for i in data.get("indices", []):
-            it = props.current_indices.add()
-            it.value = i
-
-    # πρώτη φορά που γεμίσαμε -> ξεκίνα από 0
+    if len(props.current_indices) > 0: return
+    issue = props.issue_type; data = {}
+    func = None
+    for prop, f, code in CHECKS_MAPPING:
+        if code == issue: func = f; break
+    if func:
+        d = func(obj, props.thintris_threshold) if issue=='THINTRIS' else func(obj)
+        data = d
+        if d.get("indices") and isinstance(d["indices"], dict):
+            data = {"indices": d["indices"].get("low_valence", []) + d["indices"].get("high_valence", [])}
+    if data.get("indices"): 
+        for i in data["indices"]: item=props.current_indices.add(); item.value=i
     props.current_index = 0
-    
-
-
 
 def visualize_current(context):
     obj = context.active_object
-    if obj is None or obj.type != 'MESH':
-        return
-
     props = context.scene.mesh_checker_props
     ensure_indices_for_issue(obj, props)
-
-    count = len(props.current_indices)
-    if count == 0:
-        props.progress_value = 0.0
-        return
-
-    # Clamp τρέχον δείκτη
-    if props.current_index < 0:
-        props.current_index = 0
-    if props.current_index > count - 1:
-        props.current_index = count - 1
-
+    if not props.current_indices: return
+    if props.current_index >= len(props.current_indices): props.current_index = len(props.current_indices)-1
     idx = props.current_indices[props.current_index].value
+    issue = props.issue_type; mw = obj.matrix_world; rot = mw.to_3x3()
+    pos = Vector((0,0,0)); norm = None
 
-    # Καθάρισε επιλογές
-    if obj.mode != 'EDIT':
-        bpy.ops.object.mode_set(mode='EDIT')
-    bm = bmesh.from_edit_mesh(obj.data)
-    for f in bm.faces: f.select = False
-    for e in bm.edges: e.select = False
-    for v in bm.verts: v.select = False
-    bmesh.update_edit_mesh(obj.data, loop_triangles=True)
-
-    selected_positions = []
-    issue = props.issue_type
-
-    if issue == 'FLIPPED':
-        highlight_faces(obj, [idx])
-        bm.faces.ensure_lookup_table()
-        if 0 <= idx < len(bm.faces):
-            selected_positions = [obj.matrix_world @ bm.faces[idx].calc_center_median()]
-
-    elif issue == 'POLES':
-        highlight_vertices(obj, [idx])
-        bm.verts.ensure_lookup_table()
-        if 0 <= idx < len(bm.verts):
-            v = bm.verts[idx]
-            selected_positions = [obj.matrix_world @ v.co]
-
-    elif issue == 'NGONS' or issue == 'THINTRIS':
-        highlight_faces(obj, [idx])
-        bm.faces.ensure_lookup_table()
-        if 0 <= idx < len(bm.faces):
-            selected_positions = [obj.matrix_world @ bm.faces[idx].calc_center_median()]
-
-    elif issue == 'ISOLATED':
-        highlight_vertices(obj, [idx])
-        bm.verts.ensure_lookup_table()
-        if 0 <= idx < len(bm.verts):
-            v = bm.verts[idx]
-            selected_positions = [obj.matrix_world @ v.co]
-
-    elif issue == 'NONMANIFOLD':
-        highlight_edges(obj, [idx])
-        bm.edges.ensure_lookup_table()
-        if 0 <= idx < len(bm.edges):
-            e = bm.edges[idx]
-            edge_center = (e.verts[0].co + e.verts[1].co) / 2.0
-            selected_positions = [obj.matrix_world @ edge_center]
-            
-    elif issue == 'DUPLICATES':
-        highlight_vertices(obj, [idx])
-        bm.verts.ensure_lookup_table()
-        if 0 <= idx < len(bm.verts):
-            v = bm.verts[idx]
-            selected_positions = [obj.matrix_world @ v.co]
-            
-    elif issue == 'SELFINTERSECT':
-        highlight_faces(obj, [idx])
-        bm.faces.ensure_lookup_table()
-        if 0 <= idx < len(bm.faces):
-            selected_positions = [obj.matrix_world @ bm.faces[idx].calc_center_median()]
-            
-    elif issue == 'INTERNAL':
-        highlight_faces(obj, [idx])
-        bm.faces.ensure_lookup_table()
-        if 0 <= idx < len(bm.faces):
-            selected_positions = [obj.matrix_world @ bm.faces[idx].calc_center_median()]
-    
-    elif issue == 'ORIGIN':
-        origin_loc = obj.matrix_world @ Vector((0,0,0))
-        selected_positions = [origin_loc]
-        
-    elif issue == 'INCONSISTENT':
-        highlight_faces(obj, [idx])
-        bm.faces.ensure_lookup_table()
-        if 0 <= idx < len(bm.faces):
-            selected_positions = [obj.matrix_world @ bm.faces[idx].calc_center_median()]
-
-    elif issue == 'OVERLAPPING_UV':
-        highlight_faces(obj, [idx])
-        bm.faces.ensure_lookup_table()
-        if 0 <= idx < len(bm.faces):
-            selected_positions = [obj.matrix_world @ bm.faces[idx].calc_center_median()]
-            
-    elif issue == 'EDGEFLOW':
-        highlight_vertices(obj, [idx])
-        bm.verts.ensure_lookup_table()
-        if 0 <= idx < len(bm.verts):
-            v = bm.verts[idx]
-            selected_positions = [obj.matrix_world @ v.co]
-
-    elif issue == 'HOLES':
-        rep_idx = idx
-        try:
-            mapping = json.loads(props.hole_groups_json or "{}")
-        except Exception:
-            mapping = {}
-        loop_edges = mapping.get(str(rep_idx), [rep_idx])
-
-        highlight_edges(obj, loop_edges)
-
-        bm.edges.ensure_lookup_table()
-        centers = []
-        for ei in loop_edges:
-            if 0 <= ei < len(bm.edges):
-                e = bm.edges[ei]
-                edge_center = (e.verts[0].co + e.verts[1].co) / 2.0
-                centers.append(obj.matrix_world @ edge_center)
-        if centers:
-            center = sum(centers, Vector()) / len(centers)
-            selected_positions = [center]
-
-    # Smooth view
-    if selected_positions:
-        center = sum(selected_positions, Vector()) / len(selected_positions)
-        smooth_view_to(context, center, target_distance=3.5)
-
-    # update progress (0..1)
-    if count > 0:
-        props.progress_value = (props.current_index + 1) / count
+    if issue in ['POLES', 'ISOLATED', 'DUPLICATES', 'EDGEFLOW']:
+        highlight_generic(obj, [idx], 'verts'); bm=bmesh.from_edit_mesh(obj.data); bm.verts.ensure_lookup_table()
+        if idx<len(bm.verts): v=bm.verts[idx]; pos=mw@v.co; norm=rot@v.normal if v.normal.length_squared>0 else None
+    elif issue in ['NONMANIFOLD', 'HOLES']:
+        highlight_generic(obj, [idx], 'edges'); bm=bmesh.from_edit_mesh(obj.data); bm.edges.ensure_lookup_table()
+        if idx<len(bm.edges): e=bm.edges[idx]; pos=mw@((e.verts[0].co+e.verts[1].co)/2); norm=Vector((0,0,1))
     else:
-        props.progress_value = 0.0
-
-
-# =========================================================
-# Sync helper
-# =========================================================
-
-def sync_issue_type_with_results(props):
-    if 0 <= props.current_index < len(props.results):
-        item = props.results[props.current_index]
-        if hasattr(item, "issue_type") and item.issue_type:
-            props.issue_type = item.issue_type
-
+        highlight_generic(obj, [idx], 'faces'); bm=bmesh.from_edit_mesh(obj.data); bm.faces.ensure_lookup_table()
+        if idx<len(bm.faces): f=bm.faces[idx]; pos=mw@f.calc_center_median(); norm=rot@f.normal
+    view_controller.start_animation(context, pos, norm)
 
 # =========================================================
-# Operators
+# OPERATORS
 # =========================================================
-
 class MESH_OT_RunChecks(bpy.types.Operator):
-    bl_idname = "mesh.run_checks"
-    bl_label = "Let's check your mesh"
-
+    bl_idname = "mesh.run_checks"; bl_label = "Check Mesh"
     def execute(self, context):
-        obj = context.active_object
-        props = context.scene.mesh_checker_props
+        obj = context.active_object; props = context.scene.mesh_checker_props; props.results.clear()
+        if not obj or obj.type!='MESH': return {'CANCELLED'}
+        
+        # --- SET FLAG TO IGNORE THIS UPDATE ---
+        props.is_internal_operation = True 
+        if obj.mode == 'EDIT': bmesh.update_edit_mesh(obj.data)
 
-        if obj is None or obj.type != 'MESH':
-            props.results.clear()
-            item = props.results.add()
-            item.name = "A mesh object was not detected."
-            item.issue_type = ""
+        try: base=json.loads(props.baseline_stats)
+        except: base={}
+        curr=0; base_tot=0
+        first=None
+        
+        for prop, func, code in CHECKS_MAPPING:
+            if getattr(props, prop):
+                d = func(obj, props.thintris_threshold) if code=='THINTRIS' else func(obj)
+                cnt=0; has=False
+                if d.get("indices"): 
+                    cnt = len(d["indices"].get("low_valence",[])+d["indices"].get("high_valence",[])) if isinstance(d["indices"],dict) else len(d["indices"])
+                    has=True
+                elif d.get("status")=="error": cnt=1; has=True
+                
+                if has:
+                    it=props.results.add(); it.name=d["description"]; it.issue_type=code; it.count=cnt
+                    if not first: first=code
+                    if code not in base: base[code]=cnt
+                    if base[code]>0: it.improvement=max(0.0, 1.0-(cnt/base[code]))
+                    curr+=cnt; base_tot+=base[code]
+                elif code in base: base_tot+=base[code]
+        
+        if first: props.issue_type=first
+        if curr==0: props.baseline_stats="{}"; props.total_score=1.0
+        else: props.baseline_stats=json.dumps(base); props.total_score=max(0.0,1.0-(curr/base_tot)) if base_tot>0 else 0.0
+        props.current_indices.clear(); props.current_index=0
+        return {'FINISHED'}
+
+class MESH_OT_RefreshActive(bpy.types.Operator):
+    bl_idname = "mesh.refresh_active"; bl_label = "Refresh Active"
+    def execute(self, context):
+        obj = context.active_object; props = context.scene.mesh_checker_props
+        active_type = props.issue_type
+        
+        # --- SET FLAG ---
+        props.is_internal_operation = True
+        if obj.mode == 'EDIT': bmesh.update_edit_mesh(obj.data)
+
+        func = None
+        for p, f, c in CHECKS_MAPPING:
+            if c == active_type: func = f; break
+        
+        if func:
+            d = func(obj, props.thintris_threshold) if active_type=='THINTRIS' else func(obj)
+            cnt = 0
+            if d.get("indices"): 
+                cnt = len(d["indices"].get("low_valence",[])+d["indices"].get("high_valence",[])) if isinstance(d["indices"],dict) else len(d["indices"])
+            elif d.get("status")=="error": cnt=1
+            
+            item = next((r for r in props.results if r.issue_type == active_type), None)
+            if item:
+                item.count = cnt
+                try: base=json.loads(props.baseline_stats)
+                except: base={}
+                if active_type in base and base[active_type]>0:
+                    item.improvement = max(0.0, 1.0-(cnt/base[active_type]))
+                if cnt == 0: self.report({'INFO'}, f"{ISSUE_DISPLAY_NAMES[active_type]} Fixed!")
+        
+        props.current_indices.clear(); props.current_index = 0
+        return {'FINISHED'}
+
+class MESH_OT_OpenSpecificDoc(bpy.types.Operator):
+    bl_idname = "mesh.open_specific_doc"
+    bl_label = "Open Explanation Doc"
+    issue_type: bpy.props.StringProperty()
+    def execute(self, context):
+        addon_dir = os.path.dirname(__file__)
+        filename = f"{self.issue_type}.rtf"
+        filepath = os.path.join(addon_dir, "docs", filename)
+        if not os.path.exists(filepath):
+            self.report({'ERROR'}, f"Document not found: docs/{filename}")
             return {'CANCELLED'}
-
-        # Καθάρισε παλιά αποτελέσματα
-        props.results.clear()
-
-        # --- Σημαντικό: refresh + σωστή ακολουθία modes ---
-        prev_mode = obj.mode
         try:
-            # 1) Πήγαινε OBJECT για να “ψηθούν” modifiers/geometry και να γίνει depsgraph update
-            if obj.mode != 'OBJECT':
-                bpy.ops.object.mode_set(mode='OBJECT')
-
-            # Αναγκαστικό update (μερικές φορές χρειάζεται σε 4.0/4.4)
-            try:
-                obj.data.update()
-            except Exception:
-                pass
-            context.view_layer.update()
-
-            # 2) Πήγαινε EDIT για τα detectors που βασίζονται σε bmesh.from_edit_mesh
-            bpy.ops.object.mode_set(mode='EDIT')
-
-            # --- Topology ---
-            if props.check_ngons:
-                d = detect_ngons(obj)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "NGONS"
-
-            if props.check_thin_tris:
-                d = detect_thin_tris(obj, aspect_threshold=props.thintris_threshold)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "THINTRIS"
-
-            if props.check_poles:
-                d = detect_poles(obj, min_valence=3, max_valence=6)
-                if d.get("indices", {}).get("low_valence") or d.get("indices", {}).get("high_valence"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "POLES"
-
-            if props.check_edgeflow:
-                d = detect_edge_flow(obj)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "EDGEFLOW"
-
-            if props.check_isolated:
-                d = detect_isolated_vertices(obj)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "ISOLATED"
-
-            # --- Geometry ---
-            if props.check_duplicates:
-                d = detect_duplicates(obj, distance=0.0001)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "DUPLICATES"
-
-            if props.check_nonmanifold:
-                d = detect_nonmanifold(obj)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "NONMANIFOLD"
-
-            if props.check_selfintersect:
-                d = detect_self_intersections(obj)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "SELFINTERSECT"
-
-            if props.check_holes:
-                # προτιμάμε groups/closed_groups
-                d = detect_holes(obj, closed_only=True)
-                if d.get("closed_groups") or d.get("groups"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "HOLES"
-
-            if props.check_internalfaces:
-                d = detect_internal_faces(obj)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "INTERNAL"
-
-            # --- Normals / Shading ---
-            if props.check_flipped:
-                d = detect_flipped_normals(obj)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "FLIPPED"
-
-            if props.check_inconsistent:
-                d = detect_inconsistent_normals(obj)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "INCONSISTENT"
-
-            if props.check_overlappinguv:
-                d = detect_overlapping_uvs(obj)
-                if d.get("indices"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "OVERLAPPING_UV"
-
-            # --- Workflow ---
-            if props.check_transforms:
-                d = detect_unapplied_transforms(obj)
-                if d.get("has_issue"):
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "TRANSFORMS"
-
-            if props.check_origin:
-                d = detect_wrong_origin(obj)
-                if d["status"] == "error":
-                    item = props.results.add()
-                    item.name = d["description"]
-                    item.issue_type = "ORIGIN"
-
-        finally:
-            # Γύρνα στο αρχικό mode
-            if obj.mode != prev_mode:
-                try:
-                    bpy.ops.object.mode_set(mode=prev_mode)
-                except Exception:
-                    pass
-
-        # Reset navigation cache
-        props.current_indices.clear()
-        props.current_index = 0
-        props.hole_groups_json = "{}"
-        props.progress_value = 0.0
-
-        return {'FINISHED'}
-
-
-class MESH_OT_ShowVisualization(bpy.types.Operator):
-    bl_idname = "mesh.show_visualization"
-    bl_label = "Let me see"
-
-    def execute(self, context):
-        visualize_current(context)
-        return {'FINISHED'}
-
-
-class MESH_OT_PreviousIssue(bpy.types.Operator):
-    bl_idname = "mesh.previous_issue"
-    bl_label = "Previous"
-
-    def execute(self, context):
-        props = context.scene.mesh_checker_props
-        if props.current_index > 0:
-            props.current_index -= 1
-            visualize_current(context)
-        return {'FINISHED'}
-
-
-class MESH_OT_NextIssue(bpy.types.Operator):
-    bl_idname = "mesh.next_issue"
-    bl_label = "Next"
-
-    def execute(self, context):
-        props = context.scene.mesh_checker_props
-        if props.current_index < len(props.current_indices) - 1:
-            props.current_index += 1
-            visualize_current(context)
-        return {'FINISHED'}
-
-
-class MESH_OT_JumpToIssue(bpy.types.Operator):
-    bl_idname = "mesh.jump_to_issue"
-    bl_label = "Jump to Issue"
-
-    issue_index: bpy.props.IntProperty()
-
-    def execute(self, context):
-        props = context.scene.mesh_checker_props
-
-        # Προστασία
-        if self.issue_index < 0 or self.issue_index >= len(props.results):
-            return {'CANCELLED'}
-
-        # Άλλαξε τύπο προβλήματος σύμφωνα με το result
-        result_item = props.results[self.issue_index]
-        if result_item.issue_type:
-            props.issue_type = result_item.issue_type
-
-        # Reset τρέχοντα indices για το νέο issue
-        props.current_indices.clear()
-        props.current_index = 0
-
-        obj = context.active_object
-        if obj and obj.type == 'MESH':
-            ensure_indices_for_issue(obj, props)
-            visualize_current(context)
-
-        return {'FINISHED'}
-
-
-class MESH_OT_WhyItMatters(bpy.types.Operator):
-    bl_idname = "mesh.why_it_matters"
-    bl_label = "Why it matters?"
-
-    def execute(self, context):
-        props = context.scene.mesh_checker_props
-        issue = props.issue_type
-
-        explanations = {
-            'FLIPPED': "Flipped normals cause shading artifacts, incorrect lighting and can break baking.",
-            'POLES': "High-valence poles (>5 edges) create pinching and artifacts during subdivision or deformation.",
-            'NGONS': "N-Gons (>4 edges) deform unpredictably and break subdivision flow.",
-            'NONMANIFOLD': "Non-manifold edges create invalid geometry, bad for 3D printing and boolean ops.",
-            'HOLES': "Holes in the mesh cause rendering issues, physics problems and bad subdivision.",
-            'THINTRIS': "Long thin triangles produce bad shading, poor UV unwrapping and deformation artifacts.",
-            'ISOLATED': "Isolated vertices are unused geometry data and should be cleaned for performance.",
-            'TRANSFORMS': "Unapplied transforms lead to inconsistent scale/rotation and break modifiers/export.",
-            'ORIGIN': "Wrong object origin placement makes transforms, modifiers and animation unreliable.",
-        }
-
-        msg = explanations.get(issue, "No explanation available for this issue.")
-
-        def draw_popup(self, context):
-            self.layout.label(text=msg, icon="INFO")
-
-        bpy.context.window_manager.popup_menu(draw_popup, title="Why it matters?", icon='QUESTION')
-        return {'FINISHED'}
-
-
-class MESH_OT_HowToFix(bpy.types.Operator):
-    bl_idname = "mesh.how_to_fix"
-    bl_label = "How to fix"
-
-    def execute(self, context):
-        props = context.scene.mesh_checker_props
-        issue = props.issue_type
-
-        fixes = {
-            'FLIPPED': "Edit Mode → Select All → Shift+N (recalculate). Ή Flip χειροκίνητα ανά face.",
-            'POLES': "Redirect edge flow, dissolve περιττές edges, προτίμησε quads όπου γίνεται.",
-            'NGONS': "Knife (K) ή dissolve/insert edges ώστε τα N-gons να γίνουν quads/tris.",
-            'NONMANIFOLD': "Select → Select All by Trait → Non-Manifold και καθάρισμα με Merge/Fill.",
-            'HOLES': "Επέλεξε border edges → F για Fill ή Grid Fill για καλύτερο topology.",
-            'THINTRIS': "Ξαναχάραξε edge flow, πρόσθεσε supporting geo ή κάνε retopo των λεπτών tris.",
-            'ISOLATED': "Select → Select All by Trait → Loose Geometry και Delete.",
-            'TRANSFORMS': "Ctrl+A → Apply Scale/Rotation πριν από modifiers/export.",
-            'ORIGIN': "Object → Set Origin → Origin to Geometry/3D Cursor ανάλογα με την ανάγκη.",
-        }
-
-        msg = fixes.get(issue, "No fix instructions available for this issue.")
-
-        def draw_popup(self, context):
-            self.layout.label(text=msg, icon="INFO")
-
-        bpy.context.window_manager.popup_menu(draw_popup, title="How to fix", icon='GREASEPENCIL')
-        return {'FINISHED'}
-
-
-# =========================================================
-# Panel
-# =========================================================
-
-class MESH_PT_CheckerPanel(bpy.types.Panel):
-    bl_label = "Mesh Checker"
-    bl_idname = "MESH_PT_checker"
-    bl_space_type = "VIEW_3D"
-    bl_region_type = "UI"
-    bl_category = "Learn&Fix"
-
-    def draw(self, context):
-        layout = self.layout
-        props = context.scene.mesh_checker_props
-        # --- Topology ---
-        box = layout.box()
-        row = box.row()
-        row.prop(props, "show_topology",
-                 icon="TRIA_DOWN" if props.show_topology else "TRIA_RIGHT",
-                 emboss=False)
-        row.label(text="Topology (5)")
-        if props.show_topology:
-            col = box.column(align=True)
-            col.prop(props, "check_ngons", text="N-gons (>4 edges)")
-            r = col.row(align=True)
-            r.prop(props, "check_thin_tris", text="Long thin triangles")
-            r.prop(props, "thintris_threshold", text="")
-            col.prop(props, "check_poles", text="Poles >5 edges")
-            col.prop(props, "check_edgeflow", text="Edge flow breaks")
-            col.prop(props, "check_isolated", text="Isolated vertices")
-
-        # --- Geometry ---
-        box = layout.box()
-        row = box.row()
-        row.prop(props, "show_geometry",
-                 icon="TRIA_DOWN" if props.show_geometry else "TRIA_RIGHT",
-                 emboss=False)
-        row.label(text="Geometry (5)")
-        if props.show_geometry:
-            col = box.column(align=True)
-            col.prop(props, "check_duplicates", text="Duplicate vertices")
-            col.prop(props, "check_nonmanifold", text="Non-manifold edges")
-            col.prop(props, "check_selfintersect", text="Self-intersections")
-            col.prop(props, "check_holes", text="Holes in mesh")
-            col.prop(props, "check_internalfaces", text="Internal faces")
-
-        # --- Normals / Shading ---
-        box = layout.box()
-        row = box.row()
-        row.prop(props, "show_normals",
-                 icon="TRIA_DOWN" if props.show_normals else "TRIA_RIGHT",
-                 emboss=False)
-        row.label(text="Normals / Shading (3)")
-        if props.show_normals:
-            col = box.column(align=True)
-            col.prop(props, "check_flipped", text="Flipped normals")
-            col.prop(props, "check_inconsistent", text="Inconsistent face orientation")
-            col.prop(props, "check_overlappinguv", text="Overlapping UV islands")
-
-        # --- Workflow ---
-        box = layout.box()
-        row = box.row()
-        row.prop(props, "show_workflow",
-                 icon="TRIA_DOWN" if props.show_workflow else "TRIA_RIGHT",
-                 emboss=False)
-        row.label(text="Workflow (2)")
-        if props.show_workflow:
-            col = box.column(align=True)
-            col.prop(props, "check_transforms", text="Unapplied transforms")
-            col.prop(props, "check_origin", text="Wrong object origin placement")
-
-        # --- Run checks ---
-        layout.operator("mesh.run_checks", text="Let's check your mesh", icon="MESH_DATA")
-
-        # --- Results dropdown (only if findings exist) ---
-        if len(props.results) > 0:
-            layout.separator()
-            box = layout.box()
-            row = box.row()
-            row.prop(
-                props, "show_results",
-                text=f"Results ({len(props.results)}) - Click to select error",
-                icon="TRIA_DOWN" if props.show_results else "TRIA_RIGHT",
-                emboss=False
-            )
-            if props.show_results:
-                col = box.column(align=True)
-                for i, r in enumerate(props.results):
-                    op_row = col.row(align=True)
-                    op_row.alignment = 'LEFT'  # left-aligned
-                    op = op_row.operator("mesh.jump_to_issue", text=r.name, icon="DOT", emboss=False)
-                    if op is not None:
-                        op.issue_index = i
-
-        # --- Progress (bar + %) ---
-        count = len(props.current_indices)
-        if count > 0:
-            progress = (props.current_index + 1) / count
-            row = layout.row()
-            split = row.split(factor=0.30)
-            split.label(text=f"Progress: {props.current_index+1}/{count}")
-
-            split2 = split.split(factor=0.75)
-            bar_len = 25
-            filled = int(progress * bar_len)
-            bar = "█" * filled + "░" * (bar_len - filled)
-            split2.label(text=bar)
-
-            right = split2.row()
-            right.alignment = 'RIGHT'
-            right.label(text=f"{int(progress * 100)}%")
-
-        # --- Nav + info buttons ---
-        layout.separator()
-        row = layout.row(align=True)
-        sub = row.row(align=True); sub.enabled = props.current_index > 0 and count > 0
-        sub.operator("mesh.previous_issue", text="Previous")
-        sub = row.row(align=True); sub.enabled = True
-        sub.operator("mesh.show_visualization", text="Let me see")
-        sub = row.row(align=True); sub.enabled = props.current_index < count - 1
-        sub.operator("mesh.next_issue", text="Next")
-
-        layout.separator()
-        row = layout.row(align=True)
-        row.operator("mesh.why_it_matters", text="Why it matters?", icon="QUESTION")
-        row.operator("mesh.how_to_fix", text="How to fix", icon="MODIFIER")
-        layout.separator()
-        img = get_learnfix_logo()
-        # --- Logo footer ---
-        # --- Learn&Fix Footer (dark background, scale 1) ---
-        layout.separator()
-        if "main" in preview_collections:
-            pcoll = preview_collections["main"]
-            if "learnfix_logo" in pcoll:
-                box = layout.box()
-                row = box.row()
-                row.alignment = 'CENTER'
-                row.scale_y = 0.9
-                row.template_icon(icon_value=pcoll["learnfix_logo"].icon_id, scale=2.0)
-
-
-# =========================================================
-# Register
-# =========================================================
-
-classes = (
-    MeshCheckerIndexItem,
-    MeshCheckerResultItem,
-    MeshCheckerProperties,
-    MESH_OT_RunChecks,
-    MESH_OT_ShowVisualization,
-    MESH_OT_PreviousIssue,
-    MESH_OT_NextIssue,
-    MESH_OT_JumpToIssue,
-    MESH_OT_WhyItMatters,
-    MESH_OT_HowToFix,
-    MESH_PT_CheckerPanel,
-)
-def load_previews():
-    """Load preview icons (like the Learn&Fix logo)."""
-    global preview_collections
-    pcoll = bpy.utils.previews.new()
-
-    icons_dir = os.path.join(os.path.dirname(__file__), "icons")
-    logo_path = os.path.join(icons_dir, "learnfix_logo.png")
-
-    if os.path.exists(logo_path):
-        try:
-            pcoll.load("learnfix_logo", logo_path, 'IMAGE')
-            print(f"Learn&Fix logo loaded from: {logo_path}")
+            if sys.platform == 'win32': os.startfile(filepath)
+            elif sys.platform == 'darwin': subprocess.call(('open', filepath))
+            else: subprocess.call(('xdg-open', filepath))
         except Exception as e:
-            print(f"Could not load logo: {e}")
-    else:
-        print(f"Logo not found at: {logo_path}")
+            self.report({'ERROR'}, f"Could not open file: {e}")
+            return {'CANCELLED'}
+        return {'FINISHED'}
 
-    preview_collections["main"] = pcoll
+class MESH_OT_EduDialog(bpy.types.Operator):
+    bl_idname = "mesh.edu_dialog"; bl_label = "Learn More"
+    issue_type: bpy.props.StringProperty()
+    def execute(self, context): return {'FINISHED'}
+    def draw(self, context):
+        layout = self.layout; issue = self.issue_type
+        layout.label(text=ISSUE_DISPLAY_NAMES.get(issue, issue), icon="INFO")
+        layout.separator()
+        icon_id = get_icon(issue)
+        if icon_id: layout.template_icon(icon_value=icon_id, scale=10.0)
+        else: layout.label(text="[Diagram Missing]", icon='ERROR')
+        layout.separator()
+        for line in EXPLANATIONS.get(issue, "").split("\n"): layout.label(text=line)
+        layout.separator()
+        row = layout.row(align=True); row.scale_y = 1.5
+        op = row.operator("wm.url_open", text="Watch Tutorial", icon="URL")
+        op.url = YOUTUBE_URLS.get(issue, "https://youtube.com")
+        doc_op = row.operator("mesh.open_specific_doc", text="Read Theory (.rtf)", icon="FILE_TEXT")
+        doc_op.issue_type = issue
+    def invoke(self, context, event): return context.window_manager.invoke_props_dialog(self, width=500)
 
+class MESH_OT_NavType(bpy.types.Operator):
+    bl_idname = "mesh.nav_type"; bl_label = "Nav Type"; direction: bpy.props.IntProperty()
+    
+    def execute(self, context):
+        props = context.scene.mesh_checker_props
+        current_type = props.issue_type
+        
+        # Checks are internal
+        bpy.ops.mesh.run_checks()
+        
+        if len(props.results) == 0: return {'FINISHED'}
+            
+        cur_idx = 0
+        for i, r in enumerate(props.results):
+            if r.issue_type == current_type:
+                cur_idx = i
+                break
+        
+        new_idx = (cur_idx + self.direction) % len(props.results)
+        props.issue_type = props.results[new_idx].issue_type
+        props.current_indices.clear()
+        props.current_index = 0
+        return {'FINISHED'}
 
-def unload_previews():
-    """Clean up preview icons when addon is disabled."""
-    global preview_collections
-    for pcoll in preview_collections.values():
-        bpy.utils.previews.remove(pcoll)
-    preview_collections.clear()
-    print("🧹 Learn&Fix previews unloaded.")
+class MESH_OT_NavIssue(bpy.types.Operator):
+    bl_idname = "mesh.nav_issue"; bl_label = "Nav Issue"; direction: bpy.props.IntProperty()
+    def execute(self, context):
+        props = context.scene.mesh_checker_props
+        obj = context.active_object
+        
+        # --- SET FLAG ---
+        props.is_internal_operation = True
+        if obj.mode == 'EDIT': bmesh.update_edit_mesh(obj.data)
+        
+        active_type = props.issue_type
+        func = None
+        for p, f, c in CHECKS_MAPPING:
+            if c == active_type: func = f; break
+            
+        if func:
+            d = func(obj, props.thintris_threshold) if active_type=='THINTRIS' else func(obj)
+            
+            new_indices = []
+            if d.get("indices"): 
+                if isinstance(d["indices"], dict):
+                    new_indices = d["indices"].get("low_valence", []) + d["indices"].get("high_valence", [])
+                else:
+                    new_indices = d["indices"]
+            
+            item = next((r for r in props.results if r.issue_type == active_type), None)
+            if item: item.count = len(new_indices)
+                
+            if len(new_indices) == 0:
+                self.report({'INFO'}, "All fixed! Great job.")
+                props.current_indices.clear()
+                return {'FINISHED'}
 
+            props.current_indices.clear()
+            for i in new_indices:
+                it = props.current_indices.add()
+                it.value = i
+
+        if len(props.current_indices) > 0:
+            new_idx = (props.current_index + self.direction) % len(props.current_indices)
+            props.current_index = new_idx
+            visualize_current(context)
+            
+        return {'FINISHED'}
+
+class MESH_OT_Show(bpy.types.Operator):
+    bl_idname = "mesh.show_vis"; bl_label = "Show"
+    def execute(self, context): visualize_current(context); return {'FINISHED'}
 
 # =========================================================
-# Register / Unregister
+# UI PANEL
 # =========================================================
+class MESH_PT_CheckerPanel(bpy.types.Panel):
+    bl_label = "Learn & Fix"; bl_idname = "MESH_PT_checker"; bl_space_type = "VIEW_3D"; bl_region_type = "UI"; bl_category = "Learn&Fix"
+    def draw_header(self, context):
+        layout = self.layout; icon_id = get_icon("learnfix_logo")
+        if icon_id: layout.label(text="", icon_value=icon_id)
+        else: layout.label(text="", icon="SHADERFX")
+    def draw(self, context):
+        layout = self.layout; props = context.scene.mesh_checker_props; mode = props.workflow_mode
+        box = layout.box(); box.label(text="Step 1: Choose Workflow", icon="CHECKBOX_HLT")
+        box.row().prop(props, "workflow_mode", text="")
+        if mode=='SELECT': return
+
+        layout.separator(); layout.label(text="Step 2: Detect Errors", icon="VIEWZOOM")
+        if mode=='CUSTOM':
+            b=layout.box(); b.prop(props,"show_topology",icon="TRIA_DOWN" if props.show_topology else "TRIA_RIGHT", emboss=False); b.label(text="Topology")
+            if props.show_topology: 
+                c=b.column(align=True); c.prop(props,"check_ngons"); c.prop(props,"check_poles"); c.prop(props,"check_thin_tris"); c.prop(props,"check_isolated"); c.prop(props,"check_edgeflow")
+            b=layout.box(); b.prop(props,"show_geometry",icon="TRIA_DOWN" if props.show_geometry else "TRIA_RIGHT", emboss=False); b.label(text="Geometry")
+            if props.show_geometry: 
+                c=b.column(align=True); c.prop(props,"check_duplicates"); c.prop(props,"check_nonmanifold"); c.prop(props,"check_selfintersect"); c.prop(props,"check_holes"); c.prop(props,"check_internalfaces")
+            b=layout.box(); b.prop(props,"show_normals",icon="TRIA_DOWN" if props.show_normals else "TRIA_RIGHT", emboss=False); b.label(text="Normals")
+            if props.show_normals: 
+                c=b.column(align=True); c.prop(props,"check_flipped"); c.prop(props,"check_inconsistent"); c.prop(props,"check_overlappinguv")
+            b=layout.box(); b.prop(props,"show_workflow",icon="TRIA_DOWN" if props.show_workflow else "TRIA_RIGHT", emboss=False); b.label(text="Transforms")
+            if props.show_workflow: 
+                c=b.column(align=True); c.prop(props,"check_transforms"); c.prop(props,"check_origin")
+
+        row=layout.row(); row.scale_y=1.5; row.operator("mesh.run_checks", text="Check Mesh", icon="CHECKMARK")
+        
+        # --- AUTO-CHECK UI ---
+        layout.separator()
+        row = layout.row(align=True)
+        row.prop(props, "auto_check_enabled", toggle=True, text="Auto-Check (Every X Moves)")
+        if props.auto_check_enabled:
+             row.prop(props, "auto_check_threshold", text="Moves")
+        # ---------------------
+        
+        if len(props.results)>0:
+            layout.separator(); box=layout.box(); row=box.row(); row.label(text="Health:"); row.prop(props,"total_score",text=f"{int(props.total_score*100)}%",slider=True)
+            col=box.column(); idx=0; active=None
+            for i,r in enumerate(props.results):
+                if r.issue_type==props.issue_type: idx=i+1; active=r; break
+            
+            nav=col.row(align=True); nav.scale_y=1.2; nav.alignment='CENTER'
+            nav.operator("mesh.nav_type",text="",icon="TRIA_LEFT").direction=-1
+            lbl = f"{ISSUE_DISPLAY_NAMES.get(active.issue_type, active.issue_type)} ({idx}/{len(props.results)})" if active else "Select Error"
+            nav.label(text=f"  {lbl}  ", icon="FILE_TEXT")
+            nav.operator("mesh.nav_type",text="",icon="TRIA_RIGHT").direction=1
+            col.separator()
+
+            if active:
+                ibox=col.box()
+                h_row = ibox.row()
+                h_row.label(text=f"{active.name} [{active.count}]")
+                h_row.operator("mesh.refresh_active", text="", icon="FILE_REFRESH")
+                if active.improvement>0: ibox.prop(active,"improvement",text="Fixed",slider=True,emboss=False)
+                r=ibox.row(align=True); 
+                r.operator("mesh.nav_issue",text="Prev").direction=-1
+                r.operator("mesh.show_vis",text="Show"); 
+                r.operator("mesh.nav_issue",text="Next").direction=1
+                ibox.separator()
+                edu_row = ibox.row(); edu_row.scale_y=1.3
+                op = edu_row.operator("mesh.edu_dialog", text="Explain & Fix", icon="HELP")
+                op.issue_type = active.issue_type
+        elif props.total_score==1.0 and mode!='SELECT': layout.box().label(text="Perfect Score!", icon="CHECKMARK")
+
+classes = (MeshCheckerIndexItem, MeshCheckerResultItem, MeshCheckerProperties, MESH_OT_RunChecks, MESH_OT_RefreshActive, MESH_OT_NavType, MESH_OT_NavIssue, MESH_OT_Show, MESH_OT_EduDialog, MESH_OT_OpenSpecificDoc, MESH_PT_CheckerPanel)
 
 def register():
-    load_previews()
-    for cls in classes:
-        bpy.utils.register_class(cls)
-    bpy.types.Scene.mesh_checker_props = bpy.props.PointerProperty(type=MeshCheckerProperties)
-    print("Learn&Fix registered successfully.")
-
+    load_preview_icons()
+    for c in classes: bpy.utils.register_class(c)
+    bpy.types.Scene.mesh_checker_props=bpy.props.PointerProperty(type=MeshCheckerProperties)
+    if on_depsgraph_update not in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.append(on_depsgraph_update)
 
 def unregister():
-    unload_previews()
-    for cls in reversed(classes):
-        bpy.utils.unregister_class(cls)
+    if on_depsgraph_update in bpy.app.handlers.depsgraph_update_post:
+        bpy.app.handlers.depsgraph_update_post.remove(on_depsgraph_update)
+    unload_preview_icons()
     del bpy.types.Scene.mesh_checker_props
-    print("Learn&Fix unregistered.")
+    for c in reversed(classes): bpy.utils.unregister_class(c)
 
-
-if __name__ == "__main__":
-    register()
+if __name__ == "__main__": register()

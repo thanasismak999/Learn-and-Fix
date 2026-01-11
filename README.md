@@ -61,4 +61,4 @@ Click **Check Mesh** to run the detection algorithms. The add-on will display a 
 
 ## License
 
-This project is open-source and available under the MIT License. See the [LICENSE](LICENSE) file for more information.
+This project is open-source and available under the GNU General Public License v3.0. See the [LICENSE](LICENSE) file for more information.

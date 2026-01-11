@@ -4,7 +4,7 @@ bl_info = {
     "version": (1, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Learn&Fix",
-    "description": "Smart workflow assistant. Ignores internal actions.",
+    "description": "Smart educational workflow assistant. Helps the user to learn the errors they do while using Blender 3D.",
     "category": "3D View",
 }
 
@@ -627,3 +627,4 @@ def unregister():
 
 
 if __name__ == "__main__": register()
+

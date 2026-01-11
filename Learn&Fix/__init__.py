@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Learn&Fix",
     "author": "Athanasios Makridis",
-    "version": (3, 8),
+    "version": (1, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > Learn&Fix",
     "description": "Smart workflow assistant. Ignores internal actions.",
@@ -624,5 +624,6 @@ def unregister():
     unload_preview_icons()
     del bpy.types.Scene.mesh_checker_props
     for c in reversed(classes): bpy.utils.unregister_class(c)
+
 
 if __name__ == "__main__": register()

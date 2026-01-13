@@ -190,12 +190,12 @@ def _update_issue_type(self, context):
 class MeshCheckerProperties(bpy.types.PropertyGroup):
     workflow_mode: bpy.props.EnumProperty(name="Usage Goal", items=[('SELECT', "Select a Workflow...", ""), ('PRINTING', "3D Printing", ""), ('ANIMATION', "Animation", ""), ('GAMES', "Game Asset", ""), ('CUSTOM', "Expert", "")], default='SELECT', update=update_workflow)
     
-    # --- AUTO CHECK PROPERTIES ---
+    # --- AUTO CHECK  ---
     auto_check_enabled: bpy.props.BoolProperty(name="Auto-Check", default=False)
     auto_check_threshold: bpy.props.IntProperty(name="Every X Moves", default=10, min=1, max=100)
     edit_operation_count: bpy.props.IntProperty(default=0)
     
-    # --- INTERNAL FLAG (Prevent self-triggering) ---
+    # --- INTERNAL FLAG  ---
     is_internal_operation: bpy.props.BoolProperty(default=False)
 
     show_topology: bpy.props.BoolProperty(default=True)
@@ -244,7 +244,7 @@ def on_depsgraph_update(scene, depsgraph):
     
     # --- CHECK FOR INTERNAL FLAG ---
     if props.is_internal_operation:
-        props.is_internal_operation = False # Reset and Ignore this update
+        props.is_internal_operation = False 
         return
     # -------------------------------
 
@@ -474,7 +474,6 @@ class MESH_OT_NavType(bpy.types.Operator):
         props = context.scene.mesh_checker_props
         current_type = props.issue_type
         
-        # Checks are internal
         bpy.ops.mesh.run_checks()
         
         if len(props.results) == 0: return {'FINISHED'}
@@ -627,4 +626,5 @@ def unregister():
 
 
 if __name__ == "__main__": register()
+
 

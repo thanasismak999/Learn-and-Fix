@@ -19,10 +19,7 @@ import sys
 import subprocess
 import bpy.utils.previews
 from bpy.app.handlers import persistent
-
-# =========================================================
 # IMPORTS: DETECTION MODULES
-# =========================================================
 from .checks.check_poles import detect_poles
 from .checks.check_flipped import detect_flipped_normals
 from .checks.check_ngons import detect_ngons
@@ -40,10 +37,7 @@ from .checks.check_overlappinguv import detect_overlapping_uvs
 from .checks.check_edgeflow import detect_edge_flow
 
 preview_collections = {}
-
-# =========================================================
 # CONFIGURATION & MAPPINGS
-# =========================================================
 ISSUE_DISPLAY_NAMES = {
     'FLIPPED': "Flipped Normals", 
     'POLES': "Poles", 
@@ -149,7 +143,6 @@ def update_workflow(self, context):
         for prop_name, value in defaults.items():
             if hasattr(self, prop_name): setattr(self, prop_name, value)
 
-# =========================================================
 # UTILS & IMAGE LOADING
 # =========================================================
 def load_preview_icons():
@@ -190,12 +183,10 @@ def _update_issue_type(self, context):
 class MeshCheckerProperties(bpy.types.PropertyGroup):
     workflow_mode: bpy.props.EnumProperty(name="Usage Goal", items=[('SELECT', "Select a Workflow...", ""), ('PRINTING', "3D Printing", ""), ('ANIMATION', "Animation", ""), ('GAMES', "Game Asset", ""), ('CUSTOM', "Expert", "")], default='SELECT', update=update_workflow)
     
-    # --- AUTO CHECK  ---
     auto_check_enabled: bpy.props.BoolProperty(name="Auto-Check", default=False)
     auto_check_threshold: bpy.props.IntProperty(name="Every X Moves", default=10, min=1, max=100)
     edit_operation_count: bpy.props.IntProperty(default=0)
     
-    # --- INTERNAL FLAG  ---
     is_internal_operation: bpy.props.BoolProperty(default=False)
 
     show_topology: bpy.props.BoolProperty(default=True)
@@ -228,7 +219,6 @@ class MeshCheckerProperties(bpy.types.PropertyGroup):
     baseline_stats: bpy.props.StringProperty(default="{}")
     total_score: bpy.props.FloatProperty(default=1.0, min=0.0, max=1.0, subtype='PERCENTAGE')
 
-# =========================================================
 # EVENT HANDLER: SMART FILTERING
 # =========================================================
 @persistent
@@ -242,11 +232,9 @@ def on_depsgraph_update(scene, depsgraph):
     """
     props = scene.mesh_checker_props
     
-    # --- CHECK FOR INTERNAL FLAG ---
     if props.is_internal_operation:
         props.is_internal_operation = False 
         return
-    # -------------------------------
 
     if not props.auto_check_enabled: return
     
@@ -268,7 +256,6 @@ def trigger_auto_check():
         bpy.ops.mesh.run_checks()
     return None
 
-# =========================================================
 # CAMERA & VISUALIZATION
 # =========================================================
 class SmoothViewController:
@@ -352,7 +339,6 @@ def visualize_current(context):
         if idx<len(bm.faces): f=bm.faces[idx]; pos=mw@f.calc_center_median(); norm=rot@f.normal
     view_controller.start_animation(context, pos, norm)
 
-# =========================================================
 # OPERATORS
 # =========================================================
 class MESH_OT_RunChecks(bpy.types.Operator):
@@ -361,7 +347,6 @@ class MESH_OT_RunChecks(bpy.types.Operator):
         obj = context.active_object; props = context.scene.mesh_checker_props; props.results.clear()
         if not obj or obj.type!='MESH': return {'CANCELLED'}
         
-        # --- SET FLAG TO IGNORE THIS UPDATE ---
         props.is_internal_operation = True 
         if obj.mode == 'EDIT': bmesh.update_edit_mesh(obj.data)
 
@@ -399,7 +384,6 @@ class MESH_OT_RefreshActive(bpy.types.Operator):
         obj = context.active_object; props = context.scene.mesh_checker_props
         active_type = props.issue_type
         
-        # --- SET FLAG ---
         props.is_internal_operation = True
         if obj.mode == 'EDIT': bmesh.update_edit_mesh(obj.data)
 
@@ -539,7 +523,6 @@ class MESH_OT_Show(bpy.types.Operator):
     bl_idname = "mesh.show_vis"; bl_label = "Show"
     def execute(self, context): visualize_current(context); return {'FINISHED'}
 
-# =========================================================
 # UI PANEL
 # =========================================================
 class MESH_PT_CheckerPanel(bpy.types.Panel):
@@ -571,13 +554,11 @@ class MESH_PT_CheckerPanel(bpy.types.Panel):
 
         row=layout.row(); row.scale_y=1.5; row.operator("mesh.run_checks", text="Check Mesh", icon="CHECKMARK")
         
-        # --- AUTO-CHECK UI ---
         layout.separator()
         row = layout.row(align=True)
         row.prop(props, "auto_check_enabled", toggle=True, text="Auto-Check (Every X Moves)")
         if props.auto_check_enabled:
              row.prop(props, "auto_check_threshold", text="Moves")
-        # ---------------------
         
         if len(props.results)>0:
             layout.separator(); box=layout.box(); row=box.row(); row.label(text="Health:"); row.prop(props,"total_score",text=f"{int(props.total_score*100)}%",slider=True)
@@ -626,5 +607,6 @@ def unregister():
 
 
 if __name__ == "__main__": register()
+
 
 

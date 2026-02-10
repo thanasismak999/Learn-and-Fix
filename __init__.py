@@ -19,12 +19,10 @@ import bpy.utils.previews
 from bpy.app.handlers import persistent
 from mathutils import Vector
 
-# =========================================================
 # GLOBAL VARIABLES
 # =========================================================
 addon_start_time = 0.0
 
-# =========================================================
 # IMPORTS & LOGIC
 # =========================================================
 from .checks.check_poles import detect_poles
@@ -101,17 +99,14 @@ YOUTUBE_URLS = {
     'TRANSFORMS': "https://www.youtube.com/results?search_query=blender+apply+scale"
 }
 
-# --- CLEVER EXPLANATION GENERATOR ---
 def get_smart_explanation(issue, mode, count):
     """
     Returns context-aware advice based on Issue Type, Workflow Mode, and Error Count.
     """
-    # 1. DEFAULTS
     why = "Causes issues."
     fix = "Fix manually."
     
-    # --- LOGIC ENGINE ---
-    
+
     if issue == 'FLIPPED':
         why = "Inside-out faces. Invisible in Game Engines." if mode == 'GAMES' else "Breaks shading and 3D printing."
         fix = "Edit Mode > Select All > Shift+N."
@@ -509,8 +504,8 @@ class MESH_OT_SelectAll(bpy.types.Operator):
         self.report({'INFO'}, f"Selected {len(all_indices)} {issue} elements.")
         return {'FINISHED'}
 
-# =========================================================
-# NEW: THE FLOATING HUD (PROPS DIALOG)
+
+# THE FLOATING HUD (PROPS DIALOG)
 # =========================================================
 class MESH_OT_OpenHUD(bpy.types.Operator):
     """Opens the Learn & Fix Floating Panel"""
@@ -529,11 +524,9 @@ class MESH_OT_OpenHUD(bpy.types.Operator):
         props = context.scene.mesh_checker_props
         mode = props.workflow_mode
         
-        # --- CUSTOM HEADER ROW ---
         header = layout.row()
         header.alignment = 'EXPAND'
         
-        # Logo on Left
         icon_id = get_icon("learnfix_logo")
         if icon_id:
             header.label(text="", icon_value=icon_id)
@@ -541,7 +534,6 @@ class MESH_OT_OpenHUD(bpy.types.Operator):
             header.label(text="L&F", icon="SHADERFX")
             
         header.label(text="")
-        # ------------------------
         
         layout.separator()
 
@@ -625,7 +617,6 @@ class MESH_OT_OpenHUD(bpy.types.Operator):
             if active:
                 ibox=col.box()
                 
-                # Main Controls Row
                 h_row = ibox.row()
                 h_row.label(text=f"{active.name} [{active.count}]")
                 h_row.operator("mesh.refresh_active", text="", icon="FILE_REFRESH")
@@ -640,18 +631,15 @@ class MESH_OT_OpenHUD(bpy.types.Operator):
                 
                 ibox.operator("mesh.select_all_issues", text=f"Select All", icon="RESTRICT_SELECT_OFF")
 
-                # --- INFO BUTTON (MOVED HERE) ---
                 info_row = ibox.row()
                 info_icon = "TRIA_DOWN" if props.show_explanation else "TRIA_RIGHT"
                 info_row.prop(props, "show_explanation", text="How to Fix & Tutorials", icon="INFO", toggle=True) 
                 
-                # --- CONDITIONAL EXPLANATION BOX (TOGGLED) ---
+
                 if props.show_explanation:
                     
-                    # Create a styled box for the tips
                     info_box = ibox.box()
                     
-                    # 1. SHOW CUSTOM ICON
                     pcoll = preview_collections.get("main")
                     icon_name = active.issue_type
                     
@@ -662,8 +650,6 @@ class MESH_OT_OpenHUD(bpy.types.Operator):
                         row_icon.template_icon(icon_value=icon_val, scale=8.0) 
                         info_box.separator()
 
-                    # 2. Text Description (CLEVER VERSION)
-                    # We pass the ERROR COUNT so it can recommend Modifiers if many errors exist
                     explanation = get_smart_explanation(active.issue_type, mode, active.count)
                     
                     col = info_box.column()
@@ -672,23 +658,18 @@ class MESH_OT_OpenHUD(bpy.types.Operator):
                     
                     info_box.separator()
                     
-                    # 3. Action Buttons (Tutorial / Theory) inside the box
                     edu_row = info_box.row()
                     edu_row.scale_y=1.3
                     
-                    # Watch Tutorial
                     op = edu_row.operator("wm.url_open", text="Tutorial", icon="URL")
                     op.url = YOUTUBE_URLS.get(active.issue_type, "https://youtube.com")
                     
-                    # Read Theory
                     doc_op = edu_row.operator("mesh.open_specific_doc", text="Theory", icon="FILE_TEXT")
                     doc_op.issue_type = active.issue_type
-                # ---------------------------------------------
                 
         elif props.total_score==1.0 and mode!='SELECT':
             layout.box().label(text="Perfect Score!", icon="CHECKMARK")
 
-# =========================================================
 # HEADER ANIMATION LOGIC
 # =========================================================
 def redraw_header_timer():
@@ -737,5 +718,6 @@ def unregister():
     unload_preview_icons()
     del bpy.types.Scene.mesh_checker_props
     for c in reversed(classes): bpy.utils.unregister_class(c)
+
 
 if __name__ == "__main__": register()

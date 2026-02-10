@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Learn&Fix",
     "author": "Athanasios Makridis",
-    "version": (1, 28),
+    "version": (1, 0),
     "blender": (4, 0, 0),
     "location": "View3D > Header > Learn&Fix",
     "description": "Smart educational workflow assistant.",
@@ -721,3 +721,4 @@ def unregister():
 
 
 if __name__ == "__main__": register()
+

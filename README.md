@@ -1,61 +1,61 @@
-# Learn & Fix: Automated Mesh Analysis Tool
+# Learn & Fix: Interactive Topology Feedback System
 
-**Learn & Fix** is a Blender add-on developed to assist 3D modelers in identifying, navigating, and understanding topological errors. It functions as both a diagnostic tool and an educational resource, utilizing the BMesh API to detect geometric irregularities while providing context-sensitive documentation on how to resolve them.
+Learn & Fix is an educational Blender add-on developed to assist novice 3D modellers in identifying, navigating, and understanding topological errors. Designed from a Human-Computer Interaction (HCI) perspective, it functions as an "active instructional scaffold." It utilises the BMesh API and an event-driven architecture to detect geometric irregularities in real time, providing context-sensitive pedagogy while explicitly avoiding automated "auto-fixing" to encourage skill acquisition.
 
-This software was developed as part of the thesis: *[Insert Your Thesis Title Here]*.
+This software was developed as part of the article: Bridging the Learning Gap in 3D Modelling: Design of an Interactive Topology Feedback System for Blender.
 
 ## Overview
 
-Unlike standard mesh checkers that provide only a list of indices, this tool implements a "smart assistant" workflow. It continuously monitors modeling operations to provide real-time feedback and includes a "Learn" module that explains the theoretical background of detected errors (e.g., why N-Gons affect subdivision surfaces).
+Unlike standard mesh checkers that act as post-process 'spellcheckers', this add-on implements a real-time, event-driven observer architecture. It continuously monitors modelling operations to provide immediate feedback without degrading viewport performance. Through its "Explain & Fix" pedagogical dialogue, it guides users to manually resolve issues, turning debugging into a formative learning opportunity.
 
 ### Core Functionalities
-1.  **Automated Detection:** Scans for 15 distinct topological and geometric error types.
-2.  **Interactive Navigation:** Smoothly interpolates the 3D viewport camera to specific error locations (Vertices/Faces).
-3.  **Contextual Education:** Integrated "Explain & Fix" system providing diagrams and text explanations for every error type.
-4.  **Workflow Presets:** Pre-configured detection profiles for different industries (3D Printing, Game Dev, Animation).
+1. **Event-Driven Detection:** Real-time background scanning for fundamental geometric and topological errors.
+2. **Pedagogical Scaffolding:** An integrated "Explain & Fix" system that provides clear diagrams and theoretical explanations for each error type.
+3. **Interactive Navigation:** Smoothly isolates the affected geometry using spherical linear interpolation (slerp) for the 3D viewport camera.
+4. **Visual Distinction UI:** Features a dynamic floating Heads-Up Display (HUD) and visual alert indicators designed specifically for discoverability by novice users.
 
-## Features
+## Supported Error Checks
 
-### Supported Error Checks
-The detection system covers four primary categories:
+As an entry-level instructional tool, the detection system focuses on a foundational pedagogical progression (from object-level data to topology optimisation) consisting of four core checks:
 
-* **Topology:** N-Gons (>4 verts), Poles (N/E-Poles with curvature filtering), Thin/Degenerate Triangles, Edge Flow disruptions.
-* **Geometry:** Non-Manifold edges, Open Holes, Internal Faces, Self-Intersections, Isolated Vertices, Duplicate Vertices.
-* **Surface:** Flipped Normals, Inconsistent Normals, Overlapping UVs.
-* **Object Data:** Unapplied Transforms (Scale/Rotation), Origin Offsets.
+* **Unapplied Transforms:** Detects unapplied scale and rotation discrepancies at the object level.
+* **Zero-Area Faces:** Identifies degenerate triangles/polygons mathematically acting as computational noise (Area < 1e-8).
+* **Self-Intersections:** Utilises Bounding Volume Hierarchy (BVH) trees to detect overlapping spatial volumes and intersecting geometric planes.
+* **N-gons:** Flags polygons with >4 vertices as a strict entry-level training constraint for topology optimisation.
 
-### Technical Architecture
+## Technical Architecture
+* **Compatibility:** Tested on **Blender 3.6 LTS** and **4.0**.
 * **Language:** Python 3.10+
-* **API:** Blender Python API (`bpy`, `bmesh`)
-* **Structure:** Modular design with separated logic (detection scripts) and presentation (UI/operators).
-* **Event System:** Uses `bpy.app.handlers` to monitor dependency graph updates, triggering analysis only after significant geometry changes.
+* **API:** Blender Python API (`bpy`, `bmesh`, `mathutils.bvhtree`).
+* **Structure:** Modular design mapping specific algorithms to isolated detection workflows.
+* **Event System:** Uses `bpy.app.handlers` (`on_depsgraph_update`) to monitor dependency graph updates, filtering events to trigger analysis only after significant mesh alterations.
 
 ## Installation
 
-1.  Download the latest release (`.zip`).
-2.  Open Blender (Version 3.0 or newer).
-3.  Navigate to **Edit > Preferences > Add-ons**.
-4.  Click **Install...** and select the downloaded zip file.
-5.  Enable the checkbox next to **"3D View: Learn & Fix"**.
-6.  The interface will appear in the Sidebar (N-Panel) under the "Learn&Fix" tab.
+1. Download the latest release (`.zip`).
+2. Open Blender (Version 3.6 LTS or 4.0).
+3. Navigate to **Edit > Preferences > Add-ons**.
+4. Click **Install...** and select the downloaded .zip file.
+5. Enable the checkbox next to **"3D View: Learn & Fix"**.
+6. A visual indicator will flash to help you locate the tool. You can access the primary interface via the custom floating HUD and the Sidebar (N-Panel).
 
 ## Usage Guide
 
 ### 1. Configuration
-Select a **Workflow Mode** from the main panel (e.g., "3D Printing"). This automatically enables the relevant error checks and disables irrelevant ones (e.g., ignoring Edge Flow for print-ready models).
+Select a **Workflow Mode** (e.g., 3D Printing, Game Assets). This automatically filters relevant error checks to avoid overwhelming the user (a focused-attention strategy).
 
 ### 2. Analysis
-Click **Check Mesh** to run the detection algorithms. The add-on will display a health percentage and a categorized list of found errors.
+The event-driven observer will monitor your mesh. You can also manually click **Check Mesh** to run the detection algorithms. The add-on will display a categorised list of found errors.
 
-### 3. Navigation
+### 3. Navigation & Correction
 * **Next/Prev:** Cycles through the list of errors.
-* **Show:** Snaps the view to the current error.
-* **Explain (?):** Opens the documentation popup for the current error type.
+* **Focus (Camera Icon):** Uses cinematic camera navigation (slerp) to isolate the exact problematic faces/vertices.
+* **Explain & Fix (?):** Opens the pedagogical dialog explaining *why* this geometry is flawed and *how* to manually correct it. 
 
 ## Project Structure
 
-* `__init__.py`: Registry and core operator logic.
-* `checks/`: Directory containing individual detection modules (e.g., `check_ngons.py`).
+* `__init__.py`: Registry, event handlers, and core operator logic.
+* `checks/`: Directory containing individual detection modules and BVH algorithms.
 * `docs/`: Rich Text Format files used for the internal documentation system.
 * `icons/`: UI assets.
 
